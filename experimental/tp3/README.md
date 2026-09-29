@@ -45,7 +45,8 @@ fabric), on three boxes.
          /srv/models/glm-5.3-flash-nvfp4 /srv/models/glm-5.3-flash-nvfp4-tp3 \
          /srv/models/glm-5.3-flash-dflash2 /srv/models/glm-5.3-flash-dflash2-tp3
 
-2. **compose/.env on every box** (tp3.yaml sets `TP=3`):
+2. **compose/.env on every box** (tp3.yaml takes `TP` from the `.env`, defaulting
+   to 3):
 
        MODEL_HOST_DIR=/srv/models/glm-5.3-flash-nvfp4-tp3
        DFLASH_HOST_DIR=/srv/models/glm-5.3-flash-dflash2-tp3
@@ -63,6 +64,57 @@ fabric), on three boxes.
 The entrypoint's `TP=3` case sets the KV pin (12 GiB), block size (3456),
 `MAX_NUM_SEQS` 64 with RecoverSSM (32 without) and the adaptive-k starting cost. With RecoverSSM on, the head keeps ~6.6 GB of
 host memory free while serving; a 16 GiB pin would leave ~2.6 GB, so do not raise it.
+
+## Triangle, no switch (TP=RING3)
+
+The same padded checkpoint on three GB10 boxes cabled as a triangle: each
+box's two ConnectX-7 ports go to its two neighbours, one cable per port, and
+the third box's port cables back to the first. No switch. Each cable is its
+own `/24` — one address per box per cable, MTU 9000, on the first PCIe
+root's netdevs of each port. Set `TP=RING3` in `compose/.env`; the
+entrypoint maps it to its `TP=3` case (KV pin, block size, `MAX_NUM_SEQS`,
+weight padding) and adds the ring wiring.
+
+- **Compose overlays**: the TP=3 list above, with two changes — set
+  `TP=RING3` in `compose/.env` (tp3.yaml now inherits it), and leave
+  `experimental/compose/arx.yaml` out:
+
+      docker compose -f compose/glm53.yaml \
+        -f experimental/compose/snapshot.yaml \
+        -f experimental/compose/adaptive-k.yaml -f experimental/compose/fp8.yaml \
+        -f experimental/compose/megamoe.yaml -f experimental/compose/fixes.yaml \
+        -f experimental/compose/sp.yaml -f experimental/compose/recoverssm.yaml \
+        -f experimental/compose/tp3.yaml up -d
+
+- **mentat**: 0.17.1 places ring claims of any size (a ring closes only at
+  three members or more), so `MENTAT_CLAIM_LAYOUT=ring` needs no member
+  count — the entrypoint sets it and the claim takes the three bundles of
+  the TP=3 group. Tag the LAN interface `lan` and the first root's fabric
+  netdevs `rdma` in `MENTAT_ANNOUNCE_IFACES` (step 4 of the main README):
+  the second root's netdevs carry no IPv4, so they have nothing to announce
+  and need no tag. Each rank gets its neighbours' addresses and the local
+  interface toward each from mentat; `fabric_ring.py` turns those into the
+  NCCL graph.
+
+- **One device per port**: a device joins the fabric only when its netdev
+  carries an IPv4 (its RoCE v2 GID then names that address, inside the
+  cable's subnet), so the triangle runs on the first PCIe root only — one
+  device per port, about half the two-root fabric bandwidth of the switched
+  four-box setup. The second root's netdevs (`enP2p1s0f0np0`,
+  `enP2p1s0f1np1`) sit unaddressed; put an address on one in its own subnet
+  and `fabric_ring.py` picks it up with no further change, as on a switched
+  fabric. The GID index differs per cable and moves on reboot, so ring mode
+  never pins one index: NCCL finds each device's address GID itself.
+
+- **arx**: off. arx's ring mode (`VLLM_ARX_RING`, set automatically for
+  RING4) only supports groups of 2 or 4 ranks and raises for anything else;
+  its mesh mode needs both roots on one shared GID index, which cables with
+  their own subnets and differing indexes cannot give. So no `arx.yaml`
+  above, the entrypoint exports `FABRIC_RING_ARX=0`, and `fabric_ring.py`
+  does not export the arx ring variables for RING3.
+
+Not measured yet: this section describes the wiring, and the numbers in
+"Measured" below are all switched fabrics.
 
 ## Tried and not kept
 
