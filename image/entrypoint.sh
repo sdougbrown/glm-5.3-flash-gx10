@@ -21,13 +21,20 @@ set -euo pipefail
 
 TP="${TP:-4}"
 MTP="${MTP:-1}"
-# TP=RING4 is TP=4 on four boxes cabled in a loop with no switch. mentat
-# places the ranks in cable order, and fabric_ring.py sets each rank's NCCL
-# and arx devices from the neighbours mentat gives it.
+# TP=RING4 is TP=4 on four boxes cabled in a loop with no switch, and
+# TP=RING3 is the zero-padded TP=3 checkpoint (experimental/tp3) on three
+# boxes cabled as a triangle. mentat places the ranks in cable order (a ring
+# of three needs the third box's port back to the first), and fabric_ring.py
+# sets each rank's NCCL and arx devices from the neighbours mentat gives it.
+# arx's ring mode is only defined for 2 or 4 ranks, so RING3 keeps its
+# collectives on NCCL (FABRIC_RING_ARX=0).
 FABRIC_LAYOUT=mesh
 if [[ "$TP" == RING4 ]]; then
   TP=4; FABRIC_LAYOUT=ring
   export MENTAT_CLAIM_LAYOUT=ring
+elif [[ "$TP" == RING3 ]]; then
+  TP=3; FABRIC_LAYOUT=ring
+  export MENTAT_CLAIM_LAYOUT=ring FABRIC_RING_ARX=0
 fi
 
 # --- per-TP defaults ---------------------------------------------------------
