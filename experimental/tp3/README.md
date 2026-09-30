@@ -69,52 +69,39 @@ host memory free while serving; a 16 GiB pin would leave ~2.6 GB, so do not rais
 
 The same padded checkpoint on three GB10 boxes cabled as a triangle: each
 box's two ConnectX-7 ports go to its two neighbours, one cable per port, and
-the third box's port cables back to the first. No switch. Each cable is its
-own `/24` — one address per box per cable, MTU 9000, on the first PCIe
-root's netdevs of each port. Set `TP=RING3` in `compose/.env`; the
-entrypoint maps it to its `TP=3` case (KV pin, block size, `MAX_NUM_SEQS`,
-weight padding) and adds the ring wiring.
+the third box's port cables back to the first. No switch. Set `TP=RING3` in
+`compose/.env`; the entrypoint maps it to its `TP=3` case (KV pin, block
+size, `MAX_NUM_SEQS`, weight padding) and adds the ring wiring.
 
-- **Compose overlays**: the TP=3 list above, with two changes — set
-  `TP=RING3` in `compose/.env` (tp3.yaml now inherits it), and leave
-  `experimental/compose/arx.yaml` out:
+- **Addresses**: each cable carries two 100G halves, one per PCIe root, and
+  root 0 faces root 0 on the neighbour, root 1 faces root 1 (check with
+  `ib_write_bw -x 0` between the unaddressed devices: the link-local RoCE v1
+  GID needs no address). Give each half its own `/24`, MTU 9000: six subnets
+  for three cables. A device joins the fabric only when its netdev carries an
+  IPv4, so with root 1 unaddressed the triangle runs on half its bandwidth
+  and arx has only one device per port, which its ring mode refuses.
 
-      docker compose -f compose/glm53.yaml \
-        -f experimental/compose/snapshot.yaml \
-        -f experimental/compose/adaptive-k.yaml -f experimental/compose/fp8.yaml \
-        -f experimental/compose/megamoe.yaml -f experimental/compose/fixes.yaml \
-        -f experimental/compose/sp.yaml -f experimental/compose/recoverssm.yaml \
-        -f experimental/compose/tp3.yaml up -d
+- **Compose overlays**: the TP=3 list above, with `TP=RING3` in
+  `compose/.env` (tp3.yaml inherits it).
 
 - **mentat**: 0.17.1 places ring claims of any size (a ring closes only at
   three members or more), so `MENTAT_CLAIM_LAYOUT=ring` needs no member
-  count — the entrypoint sets it and the claim takes the three bundles of
-  the TP=3 group. Tag the LAN interface `lan` and the first root's fabric
-  netdevs `rdma` in `MENTAT_ANNOUNCE_IFACES` (step 4 of the main README):
-  the second root's netdevs carry no IPv4, so they have nothing to announce
-  and need no tag. Each rank gets its neighbours' addresses and the local
-  interface toward each from mentat; `fabric_ring.py` turns those into the
-  NCCL graph.
+  count; the entrypoint sets it and the claim takes the three bundles of the
+  TP=3 group. Tag the LAN interface `lan` and the first root's fabric netdevs
+  `rdma` in `MENTAT_ANNOUNCE_IFACES` (step 4 of the main README). Each rank
+  gets its neighbours' addresses and the local interface toward each from
+  mentat, and `fabric_ring.py` finds both roots' devices behind each.
 
-- **One device per port**: a device joins the fabric only when its netdev
-  carries an IPv4 (its RoCE v2 GID then names that address, inside the
-  cable's subnet), so the triangle runs on the first PCIe root only — one
-  device per port, about half the two-root fabric bandwidth of the switched
-  four-box setup. The second root's netdevs (`enP2p1s0f0np0`,
-  `enP2p1s0f1np1`) sit unaddressed; put an address on one in its own subnet
-  and `fabric_ring.py` picks it up with no further change, as on a switched
-  fabric. The GID index differs per cable and moves on reboot, so ring mode
-  never pins one index: NCCL finds each device's address GID itself.
+- **NCCL**: subnet-aware routing (`NCCL_IB_SUBNET_AWARE_ROUTING=1`, no pinned
+  GID index), not a ring graph. NCCL takes one device per channel for both
+  directions of a graph, so a graph cannot receive from one neighbour and
+  send to the other on different cables. The GID index differs per cable and
+  moves on reboot; NCCL finds each device's address GID itself.
 
-- **arx**: off. arx's ring mode (`VLLM_ARX_RING`, set automatically for
-  RING4) only supports groups of 2 or 4 ranks and raises for anything else;
-  its mesh mode needs both roots on one shared GID index, which cables with
-  their own subnets and differing indexes cannot give. So no `arx.yaml`
-  above, the entrypoint exports `FABRIC_RING_ARX=0`, and `fabric_ring.py`
-  does not export the arx ring variables for RING3.
-
-Not measured yet: this section describes the wiring, and the numbers in
-"Measured" below are all switched fabrics.
+- **arx**: ring mode, with `ARX_RING_PREV_HCAS` / `ARX_RING_NEXT_HCAS` from
+  `fabric_ring.py`. In a ring of three every peer is a neighbour, so nothing
+  is relayed. arxbig's ring reduce-scatter assumes four ranks, so the
+  entrypoint sets `VLLM_ARXBIG=0` and prefill-sized collectives stay on NCCL.
 
 ## Tried and not kept
 
@@ -234,13 +221,23 @@ their own harness, so these aren't comparable with the main README's table
 
     TP=RING3
     HEAD_HOST=<head LAN address>
-    VLLM_GLM_ARX_PREFETCH=0      # arx is not mounted at 3 ranks (the entrypoint also defaults this for RING3)
 
-Then, on every box:
+Then, on every box (`seqcap32.yaml` last):
 
-    docker compose -f compose/glm53.yaml -f experimental/compose/snapshot.yaml \
+    docker compose -f compose/glm53.yaml -f experimental/compose/arx.yaml \
+      -f experimental/compose/snapshot.yaml \
       -f experimental/compose/adaptive-k.yaml -f experimental/compose/fp8.yaml \
       -f experimental/compose/megamoe.yaml -f experimental/compose/fixes.yaml \
       -f experimental/compose/sp.yaml -f experimental/compose/recoverssm.yaml \
-      -f experimental/compose/tp3.yaml up -d
+      -f experimental/compose/tp3.yaml -f experimental/compose/seqcap32.yaml up -d
 
+`seqcap32.yaml` caps requests at 32 and graphs at 256 tokens, and spends the ~5 GiB that frees on KV (18 GiB pin).
+
+| agent turns at 131k context, whole-turn tok/s | 1 agent | 3 agents |
+|---|---|---|
+| 12 GiB pin, 64 requests, arx off (1,905,585 KV tokens) | 45.3 | 25.1 |
+| `seqcap32.yaml`, arx off (2,960,882) | 49.7 | 23.8, 23.5 |
+| `seqcap32.yaml`, arx ring (2,960,882) | 53.6 | 24.4, 25.3 |
+
+Decode per stream at 3 agents: 34.4 / 30.3, 31.8 / 43.0, 37.0. Cold prefill with arx: 130k tokens 3,413 tok/s,
+262k 3,210 tok/s (2,870 without). `smoketest/run.sh` 8/8.
