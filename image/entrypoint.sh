@@ -35,6 +35,8 @@ if [[ "$TP" == RING4 ]]; then
 elif [[ "$TP" == RING3 ]]; then
   TP=3; FABRIC_LAYOUT=ring
   export MENTAT_CLAIM_LAYOUT=ring FABRIC_RING_ARX=0 FABRIC_RING_GRAPH=0
+  # arx is off at 3 ranks and arx.yaml is not mounted, so its L2 prefetch (sp.yaml) must be too.
+  export VLLM_GLM_ARX_PREFETCH=0
   FABRIC_CHECK="${FABRIC_CHECK:-0}"   # its mesh-mode probe cannot reach across cables
 fi
 
