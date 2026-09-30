@@ -34,7 +34,8 @@ if [[ "$TP" == RING4 ]]; then
   export MENTAT_CLAIM_LAYOUT=ring
 elif [[ "$TP" == RING3 ]]; then
   TP=3; FABRIC_LAYOUT=ring
-  export MENTAT_CLAIM_LAYOUT=ring FABRIC_RING_ARX=0
+  export MENTAT_CLAIM_LAYOUT=ring FABRIC_RING_ARX=0 FABRIC_RING_GRAPH=0
+  FABRIC_CHECK="${FABRIC_CHECK:-0}"   # its mesh-mode probe cannot reach across cables
 fi
 
 # --- per-TP defaults ---------------------------------------------------------

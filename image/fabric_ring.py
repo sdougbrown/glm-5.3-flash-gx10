@@ -159,12 +159,18 @@ def _setup() -> None:
     env = {
         "NCCL_IB_HCA": "=" + ",".join(devs),
         "NCCL_IB_MERGE_NICS": "0",
-        "NCCL_ALGO": "Ring",
         "NCCL_CROSS_NIC": "1",
-        "NCCL_GRAPH_FILE": path,
         "NCCL_IB_ADDR_FAMILY": "AF_INET",
         "NCCL_IB_ROCE_VERSION_NUM": "2",
     }
+    if os.environ.get("FABRIC_RING_GRAPH", "1") != "0":
+        env.update({"NCCL_ALGO": "Ring", "NCCL_GRAPH_FILE": path})
+    else:
+        # NCCL takes one device per channel for both directions of a ring graph,
+        # so a graph cannot send and receive on different cables. Subnet-aware
+        # routing instead opens each peer's queue pairs on the device in that
+        # peer's subnet (FABRIC_RING_GRAPH=0; entrypoint: TP=RING3).
+        env["NCCL_IB_SUBNET_AWARE_ROUTING"] = "1"
     if os.environ.get("FABRIC_RING_ARX", "1") != "0":
         env.update({
             "VLLM_ARX_RING": "1",
