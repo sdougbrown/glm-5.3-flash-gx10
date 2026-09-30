@@ -204,11 +204,11 @@ preemptions or restarts.
 
 ## On cables, with no switch
 
-Three boxes with one cable per pair also form a ring. The entrypoint has no
-mode for it (only `TP=RING4`), so the NCCL ring and each rank's
-`ARX_RING_PREV_HCAS` / `ARX_RING_NEXT_HCAS` are set by hand, with
-`VLLM_ARX_RING=1` and `VLLM_ARXBIG=0`: arx's ring takes three ranks, arxbig's
-does not ([experimental/README.md](../README.md)).
+Three boxes with one cable per pair also form a ring. `TP=RING3` sets it up:
+subnet-aware NCCL routing, arx in ring mode (`VLLM_ARX_RING=1`) with arxbig
+off, since arxbig's ring does not take three ranks
+([experimental/README.md](../README.md)). The section below has the start
+command; the RING3 section above has the fabric layout.
 
 Through a switch, with both neighbours on one port, ring and mesh at three
 ranks gave the same bits and the same all-reduce latency: 14.5 / 21.5 / 45.7 /
@@ -227,3 +227,20 @@ their own harness, so these aren't comparable with the main README's table
   104, 236 and 422 s.
 - The first boot took 753 s and later boots 184-204 s; `smoketest/run.sh`
   passed 8/8.
+
+### RING3 start command (measured 2026-09-30)
+
+`compose/.env` on every box:
+
+    TP=RING3
+    HEAD_HOST=<head LAN address>
+    VLLM_GLM_ARX_PREFETCH=0      # arx is not mounted at 3 ranks (the entrypoint also defaults this for RING3)
+
+Then, on every box:
+
+    docker compose -f compose/glm53.yaml -f experimental/compose/snapshot.yaml \
+      -f experimental/compose/adaptive-k.yaml -f experimental/compose/fp8.yaml \
+      -f experimental/compose/megamoe.yaml -f experimental/compose/fixes.yaml \
+      -f experimental/compose/sp.yaml -f experimental/compose/recoverssm.yaml \
+      -f experimental/compose/tp3.yaml up -d
+
