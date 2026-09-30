@@ -248,6 +248,17 @@ else
   echo "fabric: NCCL_IB_HCA=$NCCL_IB_HCA gid=$NCCL_IB_GID_INDEX (both pinned; derivation skipped)"
 fi
 export NCCL_IB_HCA NCCL_IB_GID_INDEX
+# TP=RING3: a triangle is a full mesh with one cable per pair and a subnet per
+# cable, and GID indexes differ per port. Pin no index; subnet-aware routing
+# opens each peer's QPs on the device in that peer's subnet. Set here, for
+# every process, rather than in fabric_ring.py, which only runs where mentat
+# hands the process its ring placement.
+if [[ "${FABRIC_RING_GRAPH:-1}" == 0 ]]; then
+  unset NCCL_IB_GID_INDEX
+  export NCCL_IB_SUBNET_AWARE_ROUTING=1 NCCL_CROSS_NIC=1 NCCL_IB_MERGE_NICS=0 \
+    NCCL_IB_ADDR_FAMILY=AF_INET NCCL_IB_ROCE_VERSION_NUM=2
+  echo "fabric: subnet-aware routing over $NCCL_IB_HCA (no pinned GID index)"
+fi
 # The EXACT interface holding VLLM_HOST_IP, not a prefix. This is only the
 # out-of-band bootstrap path -- the IB devices above carry the data -- and a
 # prefix matches every interface that happens to share it. Once the fabric
