@@ -1,0 +1,3 @@
+mode = "read-only"
+sync_branch = "ring3"
+interval = "2m"
