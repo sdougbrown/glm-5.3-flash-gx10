@@ -15,8 +15,7 @@ sets:
 - the GID from each port's own address, since each cable has its own subnet
   and no one GID index fits every device.
 - VLLM_ARX_RING, ARX_RING_PREV_HCAS and ARX_RING_NEXT_HCAS for arx, unless
-  FABRIC_RING_ARX=0 (entrypoint: TP=RING3). arx's ring mode is only defined
-  for groups of 2 or 4 ranks, and 3-rank collectives stay on NCCL.
+  FABRIC_RING_ARX=0.
 
 NCCL reads its environment on first use, so this must run before vLLM
 imports it.

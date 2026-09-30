@@ -26,17 +26,16 @@ MTP="${MTP:-1}"
 # boxes cabled as a triangle. mentat places the ranks in cable order (a ring
 # of three needs the third box's port back to the first), and fabric_ring.py
 # sets each rank's NCCL and arx devices from the neighbours mentat gives it.
-# arx's ring mode is only defined for 2 or 4 ranks, so RING3 keeps its
-# collectives on NCCL (FABRIC_RING_ARX=0).
+# In a ring of three each rank's neighbours are its only peers, so arx needs
+# no relay there; arxbig's ring reduce-scatter assumes four ranks, so RING3
+# keeps prefill-sized collectives on NCCL (VLLM_ARXBIG=0).
 FABRIC_LAYOUT=mesh
 if [[ "$TP" == RING4 ]]; then
   TP=4; FABRIC_LAYOUT=ring
   export MENTAT_CLAIM_LAYOUT=ring
 elif [[ "$TP" == RING3 ]]; then
   TP=3; FABRIC_LAYOUT=ring
-  export MENTAT_CLAIM_LAYOUT=ring FABRIC_RING_ARX=0 FABRIC_RING_GRAPH=0
-  # arx is off at 3 ranks and arx.yaml is not mounted, so its L2 prefetch (sp.yaml) must be too.
-  export VLLM_GLM_ARX_PREFETCH=0
+  export MENTAT_CLAIM_LAYOUT=ring FABRIC_RING_GRAPH=0 VLLM_ARXBIG=0
   FABRIC_CHECK="${FABRIC_CHECK:-0}"   # its mesh-mode probe cannot reach across cables
 fi
 
