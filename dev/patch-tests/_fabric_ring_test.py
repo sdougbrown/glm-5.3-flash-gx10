@@ -11,6 +11,7 @@ module's SYS_ROOT, and every path it reads, moves to the fake) and checks:
   - a port with zero usable devices raises, naming the interface
   - VLLM_ARX_RING and ARX_RING_*_HCAS are set with two devices per port; with
     one they are left out, and setup raises if arx is on
+  - FABRIC_RING_GRAPH=0 drops NCCL_ALGO and the graph for subnet-aware routing
   - NCCL_IB_GID_INDEX is dropped: ring mode picks each device's GID by its
     own address, and the cables' indexes differ
 CPU only, reads nothing from the real host:
@@ -109,7 +110,8 @@ class FakeSys:
 ENV_KEYS = ("MENTAT_FABRIC_LAYOUT", "NCCL_IB_HCA", "NCCL_IB_GID_INDEX",
             "NCCL_ALGO", "NCCL_GRAPH_FILE", "NCCL_MAX_NCHANNELS",
             "VLLM_ARX_RING", "ARX_RING_PREV_HCAS", "ARX_RING_NEXT_HCAS",
-            "VLLM_ARX_ALLREDUCE")
+            "VLLM_ARX_ALLREDUCE", "FABRIC_RING_GRAPH",
+            "NCCL_IB_SUBNET_AWARE_ROUTING")
 
 
 class RingTest(unittest.TestCase):
@@ -122,6 +124,8 @@ class RingTest(unittest.TestCase):
         os.environ.pop("NCCL_MAX_NCHANNELS", None)
         os.environ.pop("NCCL_IB_GID_INDEX", None)
         os.environ.pop("VLLM_ARX_ALLREDUCE", None)
+        os.environ.pop("FABRIC_RING_GRAPH", None)
+        os.environ.pop("NCCL_IB_SUBNET_AWARE_ROUTING", None)
         for k in ("VLLM_ARX_RING", "ARX_RING_PREV_HCAS", "ARX_RING_NEXT_HCAS"):
             os.environ.pop(k, None)
         fabric_ring.SYS_ROOT = self.fake.sys
@@ -206,6 +210,20 @@ class RingTest(unittest.TestCase):
             os.environ["VLLM_ARX_ALLREDUCE"] = "1"
             with self.assertRaisesRegex(RuntimeError, "arx.yaml"):
                 fabric_ring._setup()
+        finally:
+            fake.cleanup()
+
+    def test_subnet_routing_without_graph(self):
+        fake = FakeSys(self.addr())
+        try:
+            fabric_ring.SYS_ROOT = fake.sys
+            os.environ["FABRIC_RING_GRAPH"] = "0"
+            fabric_ring._setup()
+            self.assertNotIn("NCCL_ALGO", os.environ)
+            self.assertNotIn("NCCL_GRAPH_FILE", os.environ)
+            self.assertEqual(os.environ["NCCL_IB_SUBNET_AWARE_ROUTING"], "1")
+            self.assertEqual(os.environ["NCCL_IB_HCA"], "=" + ",".join(UNION_ORDER))
+            self.assertEqual(os.environ["VLLM_ARX_RING"], "1")
         finally:
             fake.cleanup()
 

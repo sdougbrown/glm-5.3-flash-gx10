@@ -2,16 +2,18 @@
 
 Runs at interpreter start (fabric_ring.pth) and does nothing unless mentat
 gave this process MENTAT_FABRIC_LAYOUT=ring, which it does for each rank of a
-TP=RING4 claim. On a ring each box cables one port to the previous rank and
-the other to the next, so a rank sends to next and receives from prev on
-different ports, and the diagonal ranks share no cable. This sets:
+TP=RING4 or TP=RING3 claim. On a ring each box cables one port to the
+previous rank and the other to the next, so a rank sends to next and receives
+from prev on different ports, and the diagonal ranks share no cable. This
+sets:
 
 - NCCL_IB_HCA to the addressed PCIe roots' functions of both ports (both
   roots, or the first root alone when the second carries no address),
   NCCL_ALGO=Ring so NCCL only talks to neighbours, and NCCL_GRAPH_FILE to a
   ring whose channels receive on the ports toward prev and send on the ports
   toward next. NCCL cannot infer that wiring, since it assumes every NIC
-  reaches every peer.
+  reaches every peer. With FABRIC_RING_GRAPH=0 (TP=RING3) it sets
+  NCCL_IB_SUBNET_AWARE_ROUTING instead of the graph and NCCL_ALGO.
 - the GID from each port's own address, since each cable has its own subnet
   and no one GID index fits every device.
 - VLLM_ARX_RING, ARX_RING_PREV_HCAS and ARX_RING_NEXT_HCAS for arx, when both
@@ -160,12 +162,18 @@ def _setup() -> None:
     env = {
         "NCCL_IB_HCA": "=" + ",".join(devs),
         "NCCL_IB_MERGE_NICS": "0",
-        "NCCL_ALGO": "Ring",
         "NCCL_CROSS_NIC": "1",
-        "NCCL_GRAPH_FILE": path,
         "NCCL_IB_ADDR_FAMILY": "AF_INET",
         "NCCL_IB_ROCE_VERSION_NUM": "2",
     }
+    if os.environ.get("FABRIC_RING_GRAPH", "1") != "0":
+        env.update({"NCCL_ALGO": "Ring", "NCCL_GRAPH_FILE": path})
+    else:
+        # NCCL takes one device per channel for both directions of a ring
+        # graph, so in a triangle a graph sends to next over the cable to
+        # prev. Subnet-aware routing opens each peer's queue pairs on the
+        # device in that peer's subnet.
+        env["NCCL_IB_SUBNET_AWARE_ROUTING"] = "1"
     if len(prev) == 2 and len(nxt) == 2:
         env.update({
             "VLLM_ARX_RING": "1",
